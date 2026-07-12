@@ -303,11 +303,7 @@ class PlaywrightProvider:
         
         # Check login state before searching
         if self._auth_required:
-            logged_in = await self.ensure_logged_in()
-            if not logged_in:
-                # Capture QR code for user to scan
-                await self.capture_login_qr()
-                raise RuntimeError("AUTH_REQUIRED")
+            raise RuntimeError("AUTH_REQUIRED")
         
         async with self._lock:
             items = []
