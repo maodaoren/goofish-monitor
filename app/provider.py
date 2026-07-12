@@ -385,29 +385,34 @@ class PlaywrightProvider:
                 timeout=config.browser_timeout
             )
             await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
             
-            # Look for QR code
-            qr_selectors = [
-                "img[src*='qrcode']",
-                "img[src*='qr']",
-                "[class*=qrcode] img",
-                "[class*=QRCode] img",
-                "#J_QRCodeImg img",
-            ]
+            # Find passport iframe and extract QR code
+            for frame in self._page.frames:
+                if "passport" in frame.url:
+                    logger.info("Found login iframe")
+                    
+                    # Wait for QR code to load
+                    await asyncio.sleep(3)
+                    
+                    # Try to capture QR code element
+                    try:
+                        qr_el = await frame.query_selector("#qrcode-img")
+                        if qr_el:
+                            qr_path = Path(config.data_dir) / "login_qr.png"
+                            await qr_el.screenshot(path=str(qr_path))
+                            logger.info("QR code captured: %s", qr_path)
+                            return str(qr_path)
+                    except Exception as e:
+                        logger.warning("QR capture failed: %s", e)
+                    
+                    # Fallback: capture full page
+                    qr_path = Path(config.data_dir) / "login_page.png"
+                    await frame.page.screenshot(path=str(qr_path))
+                    logger.info("Login page screenshot: %s", qr_path)
+                    return str(qr_path)
             
-            for selector in qr_selectors:
-                try:
-                    qr_el = self._page.locator(selector)
-                    if await qr_el.count() > 0:
-                        qr_path = Path(config.data_dir) / "login_qr.png"
-                        await qr_el.first.screenshot(path=str(qr_path))
-                        logger.info("QR code captured: %s", qr_path)
-                        return str(qr_path)
-                except Exception:
-                    continue
-            
-            # Fallback: screenshot the whole page
+            # No passport iframe found
             qr_path = Path(config.data_dir) / "login_page.png"
             await self._page.screenshot(path=str(qr_path))
             logger.info("Login page screenshot: %s", qr_path)
