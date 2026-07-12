@@ -121,6 +121,19 @@ class PlaywrightProvider:
         if config.block_assets:
             await self._page.route("**/*", self._route_handler)
         
+        # Load saved cookies from storage_state.json if available
+        storage_path = Path(config.storage_state_path)
+        if storage_path.exists():
+            try:
+                import json as _json
+                state = _json.loads(storage_path.read_text())
+                cookies = state.get("cookies", [])
+                if cookies:
+                    await self._context.add_cookies(cookies)
+                    logger.info("Loaded %d cookies from %s", len(cookies), storage_path)
+            except Exception as e:
+                logger.warning("Failed to load storage state: %s", e)
+        
         self._ready = True
         logger.info("Browser started with profile: %s", config.browser_profile_dir)
     
