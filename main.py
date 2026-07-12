@@ -183,6 +183,15 @@ async def wait_for_login(timeout: int = 60):
     return {"logged_in": logged_in}
 
 
+# ── Login Wait ──
+
+@app.post("/api/login/wait")
+async def wait_for_login(timeout: int = 120):
+    """Wait for login and check status."""
+    logged_in = await provider.wait_for_login(timeout=timeout)
+    return {"logged_in": logged_in}
+
+
 # ── Health ──
 
 @app.get("/health")
