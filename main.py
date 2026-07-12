@@ -202,6 +202,17 @@ async def health():
     }
 
 
+@app.get("/debug/screenshot")
+async def debug_screenshot():
+    """Debug: take screenshot of current page."""
+    try:
+        from fastapi.responses import Response
+        screenshot = await provider._page.screenshot(type="png")
+        return Response(content=screenshot, media_type="image/png")
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/debug")
 async def debug():
     """Debug: show browser state, cookies, frames."""
