@@ -46,8 +46,24 @@ class PlaywrightProvider:
         
         self._pw = await async_playwright().start()
         
+        # Start Xvfb for headed browser (bypasses headless detection)
+        import subprocess, os
+        try:
+            subprocess.Popen(
+                ["Xvfb", ":99", "-screen", "0", "1280x800x24"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            os.environ["DISPLAY"] = ":99"
+            await asyncio.sleep(1)
+            headless = False
+            logger.info("Using headed browser with Xvfb display :99")
+        except Exception as e:
+            logger.warning("Xvfb failed, falling back to headless: %s", e)
+            headless = config.headless
+        
         launch_args = [
             "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
             "--no-proxy-server",
             "--disable-infobars",
             "--disable-dev-shm-usage",
@@ -63,7 +79,7 @@ class PlaywrightProvider:
         
         self._context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=config.browser_profile_dir,
-            headless=config.headless,
+            headless=headless,
             args=launch_args,
             viewport={"width": 1280, "height": 800},
             locale="zh-CN",
@@ -129,8 +145,15 @@ class PlaywrightProvider:
                 payload = await response.json()
                 if not isinstance(payload, dict):
                     return
+                # Log API calls
+                if "mtop" in url:
+                    logger.debug("API: %s", url[:100])
                 # Search for item data in nested structures
+                before = len(self._api_items)
                 self._extract_items_from_payload(payload)
+                after = len(self._api_items)
+                if after > before:
+                    logger.info("Found %d items from API: %s", after - before, url[:80])
             except Exception:
                 pass
         
