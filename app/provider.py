@@ -192,6 +192,10 @@ class PlaywrightProvider:
             self._login_session_active = True
             self._login_session_id = session_id
             
+            # Pause scheduler so it doesn't navigate browser during login
+            from .scheduler import scheduler
+            scheduler.pause()
+            
             logger.info("Login session started (using main browser): %s", session_id)
             
             return {
@@ -260,11 +264,21 @@ class PlaywrightProvider:
             self._login_session_active = False
             self._login_session_id = None
             
+            # Resume scheduler
+            from .scheduler import scheduler
+            scheduler.resume()
+            
             logger.info("Login confirmed and saved! URL: %s", page_url)
             return {"ok": True, "status": "saved", "url": page_url}
             
         except Exception as e:
             logger.error("Login confirmation failed: %s", e)
+            # Resume scheduler on failure too
+            try:
+                from .scheduler import scheduler
+                scheduler.resume()
+            except:
+                pass
             return {"ok": False, "error": str(e)}
     
     async def check_login_status(self) -> dict:

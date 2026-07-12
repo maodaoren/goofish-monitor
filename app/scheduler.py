@@ -22,6 +22,7 @@ class Scheduler:
     def __init__(self):
         self._running = False
         self._task: asyncio.Task = None
+        self._paused = False
     
     async def start(self):
         """Start the polling loop."""
@@ -31,6 +32,16 @@ class Scheduler:
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
         logger.info("Scheduler started")
+    
+    def pause(self):
+        """Pause polling (e.g. during login)."""
+        self._paused = True
+        logger.info("Scheduler paused")
+    
+    def resume(self):
+        """Resume polling."""
+        self._paused = False
+        logger.info("Scheduler resumed")
     
     async def stop(self):
         """Stop the polling loop."""
@@ -48,6 +59,11 @@ class Scheduler:
         """Main polling loop."""
         while self._running:
             try:
+                # Skip if paused (e.g. during login)
+                if self._paused:
+                    await asyncio.sleep(config.poll_interval)
+                    continue
+                
                 # Get subscriptions due for polling
                 due_subs = await storage.get_due_subscriptions()
                 
