@@ -159,60 +159,46 @@ class PlaywrightProvider:
     _login_session_id = None
     
     async def start_login_session(self) -> dict:
-        """Start a new login session - creates ephemeral browser for QR login.
+        """Start login session using main browser.
         
-        Returns dict with session_id, screenshot_base64, page_url.
+        Navigates main browser to search page (triggers login wall),
+        captures screenshot, returns session_id for confirm step.
         """
+        import uuid
+        
         try:
-            # Create a new temporary browser context for login
-            from playwright.async_api import async_playwright
+            if not self._ready:
+                await self.start()
             
-            pw = await async_playwright().start()
-            login_browser = await pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
-            )
-            login_context = await login_browser.new_context(
-                viewport={"width": 1280, "height": 960},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            )
-            login_page = await login_context.new_page()
-            
-            # Navigate to login page (search triggers login wall)
-            await login_page.goto(
+            # Navigate main browser to search page → triggers login wall
+            await self._page.goto(
                 "https://www.goofish.com/search?q=%E9%97%B2%E9%B1%BC",
                 wait_until="domcontentloaded",
                 timeout=30000
             )
-            await login_page.wait_for_timeout(3000)
+            await self._page.wait_for_timeout(3000)
             
-            # Capture screenshot
-            screenshot_bytes = await login_page.screenshot(type="jpeg", quality=70)
+            # Capture screenshot (login wall with QR code)
             import base64
+            screenshot_bytes = await self._page.screenshot(type="jpeg", quality=70)
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
             
-            # Generate session ID
-            import uuid
             session_id = uuid.uuid4().hex
-            
-            # Store login session info
             self._login_sessions[session_id] = {
-                "pw": pw,
-                "browser": login_browser,
-                "context": login_context,
-                "page": login_page,
                 "created_at": time.time(),
+                "status": "waiting",
             }
+            self._auth_required = True
             self._login_session_active = True
             self._login_session_id = session_id
             
-            logger.info("Login session started: %s", session_id)
+            logger.info("Login session started (using main browser): %s", session_id)
             
             return {
                 "ok": True,
                 "session_id": session_id,
                 "screenshot_base64": screenshot_b64,
-                "page_url": login_page.url,
+                "page_url": self._page.url,
                 "timeout_sec": 120,
             }
             
@@ -223,52 +209,45 @@ class PlaywrightProvider:
     async def confirm_login(self, session_id: str) -> dict:
         """Confirm login after user scans QR code.
         
-        Validates login state and saves cookies to main browser.
+        Checks main browser's current page to see if login succeeded
+        (the user scanned the QR in the main browser, so cookies are already there).
         """
-        if session_id not in self._login_sessions:
-            return {"ok": False, "error": "Invalid session ID"}
-        
-        session_info = self._login_sessions[session_id]
-        login_page = session_info["page"]
+        if session_info := self._login_sessions.get(session_id):
+            session_info["status"] = "confirming"
         
         try:
-            # Check if login was successful by navigating to search
-            await login_page.goto(
+            if not self._ready:
+                return {"ok": False, "error": "Browser not ready"}
+            
+            # Navigate to search page to verify login
+            await self._page.goto(
                 "https://www.goofish.com/search?q=test",
                 wait_until="domcontentloaded",
                 timeout=15000
             )
-            await login_page.wait_for_timeout(2000)
+            await self._page.wait_for_timeout(2000)
             
-            content = await login_page.content()
-            if "passport.goofish.com" in content:
-                return {"ok": False, "error": "Login not successful - still showing login wall"}
+            content = await self._page.content()
+            page_url = self._page.url
             
-            # Login successful! Save state
-            storage_state = await session_info["context"].storage_state()
-            Path(config.storage_state_path).write_text(json.dumps(storage_state))
+            # Check for login wall
+            if "passport.goofish.com" in content or "alibaba-login-box" in content:
+                return {"ok": False, "error": "Login not successful - still showing login wall", "url": page_url}
             
-            # Copy browser profile to main directory
-            import shutil
-            src_profile = session_info["context"].browser._impl_obj._browser_context._options.get("user_data_dir")
-            if src_profile and Path(src_profile).exists():
-                dst_profile = Path(config.browser_profile_dir)
-                if dst_profile.exists():
-                    shutil.rmtree(dst_profile)
-                shutil.copytree(src_profile, dst_profile)
+            # Login successful! Save storage state
+            storage_state = await self._context.storage_state()
+            storage_path = Path(config.storage_state_path)
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            storage_path.write_text(json.dumps(storage_state))
             
-            # Close login session
-            await session_info["context"].close()
-            await session_info["browser"].close()
-            await session_info["pw"].stop()
-            del self._login_sessions[session_id]
-            
+            # Cleanup
+            self._login_sessions.pop(session_id, None)
             self._auth_required = False
             self._login_session_active = False
             self._login_session_id = None
             
-            logger.info("Login confirmed and saved!")
-            return {"ok": True, "status": "saved"}
+            logger.info("Login confirmed and saved! URL: %s", page_url)
+            return {"ok": True, "status": "saved", "url": page_url}
             
         except Exception as e:
             logger.error("Login confirmation failed: %s", e)
