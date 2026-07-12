@@ -516,9 +516,10 @@ class PlaywrightProvider:
             self._auth_required = True
             return []
         
-        # Try to extract items from page
-        items = await self._extract_items()
-        logger.info("Extracted %d items", len(items))
+        # Use API-intercepted items (more reliable than DOM parsing)
+        items = list(self._api_items)
+        self._api_items.clear()
+        logger.info("Got %d items from API interceptor", len(items))
         
         return items
     
