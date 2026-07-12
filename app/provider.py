@@ -374,52 +374,69 @@ class PlaywrightProvider:
         return None
     
     async def capture_login_qr(self) -> Optional[str]:
-        """Navigate to login page and capture QR code screenshot."""
+        """Navigate to login page and capture screenshot for QR login.
+        
+        Following the original project's approach: capture the full page
+        screenshot (including QR code) and save as JPEG.
+        """
         if not self._ready:
             await self.start()
         
         try:
             # Navigate to search which triggers login wall
             await self._page.goto(
-                "https://www.goofish.com/search?q=test",
+                "https://www.goofish.com/search?q=闲鱼",
+                timeout=config.browser_timeout
+            )
+            await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
+            
+            # Wait for page to settle and QR code to load
+            await asyncio.sleep(5)
+            
+            # Capture full page screenshot as JPEG (like original project)
+            qr_path = Path(config.data_dir) / "login_qr.jpg"
+            await self._page.screenshot(
+                path=str(qr_path),
+                type="jpeg",
+                quality=80,
+                full_page=False
+            )
+            logger.info("Login page screenshot saved: %s", qr_path)
+            
+            # Also save as PNG for web serving
+            png_path = Path(config.data_dir) / "login_qr.png"
+            await self._page.screenshot(path=str(png_path))
+            logger.info("Login page PNG saved: %s", png_path)
+            
+            return str(png_path)
+            
+        except Exception as e:
+            logger.error("Failed to capture QR: %s", e)
+            return None
+    
+    async def capture_login_qr_base64(self) -> Optional[str]:
+        """Capture login screenshot and return as base64 string."""
+        if not self._ready:
+            await self.start()
+        
+        try:
+            await self._page.goto(
+                "https://www.goofish.com/search?q=闲鱼",
                 timeout=config.browser_timeout
             )
             await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
             await asyncio.sleep(5)
             
-            # Find passport iframe and extract QR code
-            for frame in self._page.frames:
-                if "passport" in frame.url:
-                    logger.info("Found login iframe")
-                    
-                    # Wait for QR code to load
-                    await asyncio.sleep(3)
-                    
-                    # Try to capture QR code element
-                    try:
-                        qr_el = await frame.query_selector("#qrcode-img")
-                        if qr_el:
-                            qr_path = Path(config.data_dir) / "login_qr.png"
-                            await qr_el.screenshot(path=str(qr_path))
-                            logger.info("QR code captured: %s", qr_path)
-                            return str(qr_path)
-                    except Exception as e:
-                        logger.warning("QR capture failed: %s", e)
-                    
-                    # Fallback: capture full page
-                    qr_path = Path(config.data_dir) / "login_page.png"
-                    await frame.page.screenshot(path=str(qr_path))
-                    logger.info("Login page screenshot: %s", qr_path)
-                    return str(qr_path)
-            
-            # No passport iframe found
-            qr_path = Path(config.data_dir) / "login_page.png"
-            await self._page.screenshot(path=str(qr_path))
-            logger.info("Login page screenshot: %s", qr_path)
-            return str(qr_path)
+            # Capture as JPEG base64 (like original project)
+            image_bytes = await self._page.screenshot(
+                type="jpeg",
+                quality=70,
+                full_page=False
+            )
+            return base64.b64encode(image_bytes).decode("ascii")
             
         except Exception as e:
-            logger.error("Failed to capture QR: %s", e)
+            logger.error("Failed to capture QR base64: %s", e)
             return None
     
     async def wait_for_login(self, timeout: int = 60) -> bool:
