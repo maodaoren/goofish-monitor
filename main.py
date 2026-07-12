@@ -202,6 +202,46 @@ async def health():
     }
 
 
+@app.get("/debug")
+async def debug():
+    """Debug: show browser state, cookies, frames."""
+    try:
+        if not provider._ready:
+            return {"error": "browser not ready"}
+        
+        page = provider._page
+        ctx = provider._context
+        
+        cookies = await ctx.cookies()
+        cookie_names = [c["name"] for c in cookies]
+        
+        frames = []
+        for f in page.frames:
+            frames.append({"url": f.url[:120], "name": getattr(f, "name", "")})
+        
+        content = await page.content()
+        has_passport = "passport.goofish.com" in content
+        has_login_box = "alibaba-login-box" in content
+        
+        login_markers = []
+        for f in page.frames:
+            fu = f.url
+            if "mtop.taobao" in fu or "mtop.idle" in fu:
+                login_markers.append(fu[:120])
+        
+        return {
+            "url": page.url,
+            "cookies_count": len(cookies),
+            "cookie_names": cookie_names[:30],
+            "frames": frames[:10],
+            "has_passport_in_content": has_passport,
+            "has_login_box": has_login_box,
+            "login_api_markers": login_markers,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── Main ──
 
 if __name__ == "__main__":
