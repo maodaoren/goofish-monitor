@@ -171,9 +171,12 @@ class PlaywrightProvider:
         if not self._ready:
             await self.start()
         
+        # Check login state before searching
         if self._auth_required:
             logged_in = await self.ensure_logged_in()
             if not logged_in:
+                # Capture QR code for user to scan
+                await self.capture_login_qr()
                 raise RuntimeError("AUTH_REQUIRED")
         
         async with self._lock:
@@ -185,6 +188,10 @@ class PlaywrightProvider:
                     )
                     items.extend(page_items)
                     
+                    # If we got items on first page, we're logged in
+                    if page_num == 1 and len(page_items) > 0:
+                        logger.info("Login confirmed - got %d items", len(page_items))
+                    
                     if page_num < pages:
                         await asyncio.sleep(1.5)  # Polite delay
                     
@@ -195,8 +202,19 @@ class PlaywrightProvider:
                     logger.error("Search error on page %d: %s", page_num, e)
                     if "captcha" in str(e).lower() or "auth" in str(e).lower():
                         self._auth_required = True
+                        await self.capture_login_qr()
                         raise RuntimeError("AUTH_REQUIRED")
                     break
+            
+            # If no items found, might need login
+            if len(items) == 0:
+                logger.warning("No items found - checking if login is required")
+                # Try to detect login wall
+                content = await self._page.content()
+                if "passport" in content or "login" in content.lower():
+                    self._auth_required = True
+                    await self.capture_login_qr()
+                    raise RuntimeError("AUTH_REQUIRED")
             
             # Deduplicate by item_id
             seen = set()
