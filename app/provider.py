@@ -112,12 +112,27 @@ class PlaywrightProvider:
         try:
             await self._page.goto("https://www.goofish.com/", timeout=15000)
             await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
+            await asyncio.sleep(2)
             
             # Check for login wall
             content = await self._page.content()
             if "passport.goofish.com" in content or "alibaba-login-box" in content:
-                logger.warning("Login required")
+                logger.warning("Login required - capturing QR code")
                 self._auth_required = True
+                # Try to capture QR code
+                await self.capture_login_qr()
+                return False
+            
+            # Check if we can access search results
+            await self._page.goto("https://www.goofish.com/search?q=test", timeout=15000)
+            await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
+            await asyncio.sleep(2)
+            
+            content = await self._page.content()
+            if "passport.goofish.com" in content:
+                logger.warning("Login required for search")
+                self._auth_required = True
+                await self.capture_login_qr()
                 return False
             
             # Try quick login

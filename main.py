@@ -12,6 +12,7 @@ from app.storage import storage
 from app.notifier import notifier
 from app.provider import provider
 from app.scheduler import scheduler
+from app.qr_handler import setup_qr_routes
 
 # Configure logging
 logging.basicConfig(
@@ -60,6 +61,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan
 )
+
+# Setup QR code routes
+setup_qr_routes(app)
 
 
 # ── Models ──
