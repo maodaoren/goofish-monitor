@@ -117,6 +117,25 @@ class PlaywrightProvider:
             });
         """)
         
+        # Intercept JSON API responses for item data
+        self._api_items = []
+        
+        async def _on_response(response):
+            url = response.url
+            ct = response.headers.get("content-type", "")
+            if "json" not in ct:
+                return
+            try:
+                payload = await response.json()
+                if not isinstance(payload, dict):
+                    return
+                # Search for item data in nested structures
+                self._extract_items_from_payload(payload)
+            except Exception:
+                pass
+        
+        self._page.on("response", _on_response)
+        
         # Block assets if configured
         if config.block_assets:
             await self._page.route("**/*", self._route_handler)
@@ -328,6 +347,62 @@ class PlaywrightProvider:
             
         except Exception as e:
             return {"logged_in": False, "reason": str(e)}
+    
+    def _extract_items_from_payload(self, data, depth=0):
+        """Recursively search JSON payload for item data."""
+        if depth > 8 or len(self._api_items) > 200:
+            return
+        if isinstance(data, dict):
+            # Check if this dict looks like an item
+            title = None
+            item_id = None
+            price = None
+            url = None
+            
+            for key in ("title", "item_title", "name", "itemName", "subject"):
+                val = data.get(key)
+                if isinstance(val, str) and len(val) > 3:
+                    title = val
+                    break
+            
+            for key in ("item_id", "itemId", "id", "auctionId", "targetId"):
+                val = data.get(key)
+                if val:
+                    item_id = str(val)
+                    break
+            
+            for key in ("price", "price_text", "priceText"):
+                val = data.get(key)
+                if val is not None:
+                    try:
+                        price = float(str(val).replace("¥", "").replace(",", "").strip())
+                    except (ValueError, TypeError):
+                        pass
+                    break
+            
+            for key in ("url", "item_url", "detail_url", "jumpUrl"):
+                val = data.get(key)
+                if isinstance(val, str) and val:
+                    url = val
+                    break
+            
+            if title and item_id and price is not None:
+                if not url:
+                    url = f"https://www.goofish.com/item?id={item_id}"
+                elif not url.startswith("http"):
+                    url = f"https://www.goofish.com{url}"
+                self._api_items.append(Item(
+                    item_id=item_id, title=title, price=price, url=url
+                ))
+            
+            # Recurse into values
+            for v in data.values():
+                if isinstance(v, (dict, list)):
+                    self._extract_items_from_payload(v, depth + 1)
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, (dict, list)):
+                    self._extract_items_from_payload(item, depth + 1)
     
     async def search(self, keyword: str, pages: int = 3,
                      min_price: float = 0, max_price: float = 999999) -> List[Item]:
