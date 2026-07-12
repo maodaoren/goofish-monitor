@@ -48,6 +48,16 @@ class PlaywrightProvider:
         launch_args = [
             "--disable-blink-features=AutomationControlled",
             "--no-proxy-server",
+            "--disable-infobars",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
         ]
         
         self._context = await self._pw.chromium.launch_persistent_context(
@@ -57,6 +67,10 @@ class PlaywrightProvider:
             viewport={"width": 1280, "height": 800},
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            extra_http_headers={
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            },
         )
         
         # Attach page state watchers
@@ -67,6 +81,40 @@ class PlaywrightProvider:
             self._page = self._context.pages[0]
         else:
             self._page = await self._context.new_page()
+        
+        # Add stealth scripts to every page
+        await self._context.add_init_script("""
+            // Override webdriver property
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // Override chrome property
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+            
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Override plugins length
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            
+            // Override languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['zh-CN', 'zh', 'en']
+            });
+        """)
         
         # Block assets if configured
         if config.block_assets:
