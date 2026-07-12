@@ -164,23 +164,24 @@ async def search_items(keyword: str, pages: int = 1):
 # ── Login API ──
 
 @app.post("/api/login")
-async def trigger_login():
-    """Trigger QR code login - captures QR screenshot."""
-    qr_path = await provider.capture_login_qr()
-    if qr_path:
-        return {
-            "status": "waiting",
-            "message": "请扫描二维码登录",
-            "qr_path": qr_path,
-        }
-    return {"status": "error", "message": "无法获取二维码"}
+async def start_login():
+    """Start login session - opens browser and captures QR screenshot."""
+    result = await provider.start_login_session()
+    return result
 
 
-@app.post("/api/login/wait")
-async def wait_for_login(timeout: int = 60):
-    """Wait for QR code scan and login completion."""
-    logged_in = await provider.wait_for_login(timeout=timeout)
-    return {"logged_in": logged_in}
+@app.post("/api/login/confirm")
+async def confirm_login(session_id: str):
+    """Confirm login after user scans QR code."""
+    result = await provider.confirm_login(session_id)
+    return result
+
+
+@app.get("/api/login/status")
+async def login_status():
+    """Check if main browser is logged in."""
+    result = await provider.check_login_status()
+    return result
 
 
 # ── Login Wait ──
