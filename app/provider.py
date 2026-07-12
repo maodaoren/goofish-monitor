@@ -372,10 +372,23 @@ class PlaywrightProvider:
             return {"logged_in": False, "reason": str(e)}
     
     def _extract_items_from_payload(self, data, depth=0):
-        """Recursively search JSON payload for item data."""
-        if depth > 8 or len(self._api_items) > 200:
+        """Extract items from Xianyu API response.
+        
+        Handles two structures:
+        1. resultList[].data.item.main - PC search API format
+        2. Generic nested dict with title/itemId/price keys
+        """
+        if depth > 10 or len(self._api_items) > 200:
             return
+        
         if isinstance(data, dict):
+            # Structure 1: Xianyu PC search API - resultList format
+            if "resultList" in data and isinstance(data["resultList"], list):
+                for entry in data["resultList"]:
+                    self._extract_search_item(entry)
+                return
+            
+            # Structure 2: Generic recursive search
             # Check if this dict looks like an item
             title = None
             item_id = None
@@ -394,14 +407,17 @@ class PlaywrightProvider:
                     item_id = str(val)
                     break
             
-            for key in ("price", "price_text", "priceText"):
+            for key in ("price", "price_text", "priceText", "soldPrice"):
                 val = data.get(key)
                 if val is not None:
                     try:
-                        price = float(str(val).replace("¥", "").replace(",", "").strip())
+                        p = str(val).replace("¥", "").replace(",", "").strip()
+                        if p:
+                            price = float(p)
                     except (ValueError, TypeError):
                         pass
-                    break
+                    if price is not None:
+                        break
             
             for key in ("url", "item_url", "detail_url", "jumpUrl"):
                 val = data.get(key)
@@ -426,6 +442,71 @@ class PlaywrightProvider:
             for item in data:
                 if isinstance(item, (dict, list)):
                     self._extract_items_from_payload(item, depth + 1)
+    
+    def _extract_search_item(self, entry):
+        """Extract a single item from Xianyu search resultList entry."""
+        try:
+            if not isinstance(entry, dict):
+                return
+            item_data = entry.get("data", {}).get("item", {})
+            if not item_data:
+                return
+            
+            main = item_data.get("main", {})
+            ex = main.get("exContent", {})
+            
+            # Get item ID
+            item_id = str(ex.get("itemId", "")).strip()
+            if not item_id:
+                return
+            
+            # Get title from detailParams
+            detail_params = ex.get("detailParams", {})
+            title = detail_params.get("title", "")
+            if not title:
+                title = ex.get("richTitle", "")
+            if not title:
+                return
+            
+            # Get price
+            price = None
+            click_args = main.get("clickParam", {}).get("args", {})
+            price_str = click_args.get("price", "")
+            if price_str:
+                try:
+                    price = float(str(price_str).replace("¥", "").replace(",", "").strip())
+                except (ValueError, TypeError):
+                    pass
+            
+            if price is None:
+                # Try oriPrice from exContent
+                ori_price = ex.get("oriPrice", "")
+                if ori_price:
+                    try:
+                        price = float(str(ori_price).replace("¥", "").replace(",", "").strip())
+                    except (ValueError, TypeError):
+                        pass
+            
+            if price is None:
+                price = 0
+            
+            # Get URL
+            target_url = main.get("targetUrl", "")
+            if target_url and not target_url.startswith("http"):
+                url = f"https://www.goofish.com/item?id={item_id}"
+            else:
+                url = f"https://www.goofish.com/item?id={item_id}"
+            
+            self._api_items.append(Item(
+                item_id=item_id,
+                title=title,
+                price=price,
+                url=url,
+                seller_name=detail_params.get("userNick", ""),
+                location=ex.get("area", ""),
+            ))
+        except Exception as e:
+            logger.debug("Error extracting search item: %s", e)
     
     async def search(self, keyword: str, pages: int = 3,
                      min_price: float = 0, max_price: float = 999999) -> List[Item]:
