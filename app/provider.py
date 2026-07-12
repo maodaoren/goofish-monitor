@@ -37,6 +37,7 @@ class PlaywrightProvider:
         self._lock = asyncio.Lock()
         self._ready = False
         self._auth_required = False
+        self._login_sessions: dict = {}
     
     async def start(self):
         """Launch browser with persistent context."""
@@ -152,66 +153,147 @@ class PlaywrightProvider:
             self._auth_required = True
             logger.warning("Captcha detected: %s", url[:100])
     
-    async def ensure_logged_in(self) -> bool:
-        """Check if logged in, trigger QR login if not."""
-        if self._auth_required:
-            return False
+    # ── Login Session Management (ref: original project) ──
+    
+    _login_session_active = False
+    _login_session_id = None
+    
+    async def start_login_session(self) -> dict:
+        """Start a new login session - creates ephemeral browser for QR login.
+        
+        Returns dict with session_id, screenshot_base64, page_url.
+        """
+        try:
+            # Create a new temporary browser context for login
+            from playwright.async_api import async_playwright
+            
+            pw = await async_playwright().start()
+            login_browser = await pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+            )
+            login_context = await login_browser.new_context(
+                viewport={"width": 1280, "height": 960},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            )
+            login_page = await login_context.new_page()
+            
+            # Navigate to login page (search triggers login wall)
+            await login_page.goto(
+                "https://www.goofish.com/search?q=%E9%97%B2%E9%B1%BC",
+                wait_until="domcontentloaded",
+                timeout=30000
+            )
+            await login_page.wait_for_timeout(3000)
+            
+            # Capture screenshot
+            screenshot_bytes = await login_page.screenshot(type="jpeg", quality=70)
+            import base64
+            screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+            
+            # Generate session ID
+            import uuid
+            session_id = uuid.uuid4().hex
+            
+            # Store login session info
+            self._login_sessions[session_id] = {
+                "pw": pw,
+                "browser": login_browser,
+                "context": login_context,
+                "page": login_page,
+                "created_at": time.time(),
+            }
+            self._login_session_active = True
+            self._login_session_id = session_id
+            
+            logger.info("Login session started: %s", session_id)
+            
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "screenshot_base64": screenshot_b64,
+                "page_url": login_page.url,
+                "timeout_sec": 120,
+            }
+            
+        except Exception as e:
+            logger.error("Failed to start login session: %s", e)
+            return {"ok": False, "error": str(e)}
+    
+    async def confirm_login(self, session_id: str) -> dict:
+        """Confirm login after user scans QR code.
+        
+        Validates login state and saves cookies to main browser.
+        """
+        if session_id not in self._login_sessions:
+            return {"ok": False, "error": "Invalid session ID"}
+        
+        session_info = self._login_sessions[session_id]
+        login_page = session_info["page"]
         
         try:
-            await self._page.goto("https://www.goofish.com/", timeout=15000)
-            await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
-            await asyncio.sleep(2)
+            # Check if login was successful by navigating to search
+            await login_page.goto(
+                "https://www.goofish.com/search?q=test",
+                wait_until="domcontentloaded",
+                timeout=15000
+            )
+            await login_page.wait_for_timeout(2000)
             
-            # Check for login wall
-            content = await self._page.content()
-            if "passport.goofish.com" in content or "alibaba-login-box" in content:
-                logger.warning("Login required - capturing QR code")
-                self._auth_required = True
-                # Try to capture QR code
-                await self.capture_login_qr()
-                return False
+            content = await login_page.content()
+            if "passport.goofish.com" in content:
+                return {"ok": False, "error": "Login not successful - still showing login wall"}
             
-            # Check if we can access search results
-            await self._page.goto("https://www.goofish.com/search?q=test", timeout=15000)
-            await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
-            await asyncio.sleep(2)
+            # Login successful! Save state
+            storage_state = await session_info["context"].storage_state()
+            Path(config.storage_state_path).write_text(json.dumps(storage_state))
+            
+            # Copy browser profile to main directory
+            import shutil
+            src_profile = session_info["context"].browser._impl_obj._browser_context._options.get("user_data_dir")
+            if src_profile and Path(src_profile).exists():
+                dst_profile = Path(config.browser_profile_dir)
+                if dst_profile.exists():
+                    shutil.rmtree(dst_profile)
+                shutil.copytree(src_profile, dst_profile)
+            
+            # Close login session
+            await session_info["context"].close()
+            await session_info["browser"].close()
+            await session_info["pw"].stop()
+            del self._login_sessions[session_id]
+            
+            self._auth_required = False
+            self._login_session_active = False
+            self._login_session_id = None
+            
+            logger.info("Login confirmed and saved!")
+            return {"ok": True, "status": "saved"}
+            
+        except Exception as e:
+            logger.error("Login confirmation failed: %s", e)
+            return {"ok": False, "error": str(e)}
+    
+    async def check_login_status(self) -> dict:
+        """Check if main browser is logged in."""
+        if not self._ready:
+            return {"logged_in": False, "reason": "browser not ready"}
+        
+        try:
+            await self._page.goto(
+                "https://www.goofish.com/search?q=test",
+                timeout=15000
+            )
+            await self._page.wait_for_timeout(2000)
             
             content = await self._page.content()
             if "passport.goofish.com" in content:
-                logger.warning("Login required for search")
-                self._auth_required = True
-                await self.capture_login_qr()
-                return False
+                return {"logged_in": False, "reason": "login wall detected"}
             
-            # Try quick login
-            for selector in ["text=快速进入", "text=快速登录", "text=一键登录"]:
-                try:
-                    btn = self._page.locator(selector)
-                    if await btn.count() > 0:
-                        await btn.first.click()
-                        await self._page.wait_for_load_state("networkidle", timeout=5000)
-                        logger.info("Quick login successful")
-                        await self._persist_state()
-                        return True
-                except Exception:
-                    continue
-            
-            logger.info("Login state OK")
-            await self._persist_state()
-            return True
+            return {"logged_in": True}
             
         except Exception as e:
-            logger.error("Login check failed: %s", e)
-            return False
-    
-    async def _persist_state(self):
-        """Save browser state (cookies, localStorage)."""
-        try:
-            state = await self._context.storage_state()
-            Path(config.storage_state_path).write_text(json.dumps(state))
-            logger.info("Browser state saved")
-        except Exception as e:
-            logger.warning("Failed to save state: %s", e)
+            return {"logged_in": False, "reason": str(e)}
     
     async def search(self, keyword: str, pages: int = 3,
                      min_price: float = 0, max_price: float = 999999) -> List[Item]:
