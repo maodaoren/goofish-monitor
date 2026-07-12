@@ -217,14 +217,27 @@ class PlaywrightProvider:
         if max_price < 999999:
             url += f"&priceUpper={max_price}"
         
+        logger.info("Navigating to: %s", url)
         await self._page.goto(url, timeout=config.browser_timeout)
         await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
         
         # Wait for content to load
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
+        
+        # Check current URL
+        current_url = self._page.url
+        logger.info("Current URL: %s", current_url)
+        
+        # Check for login wall
+        content = await self._page.content()
+        if "passport.goofish.com" in content:
+            logger.warning("Login wall detected on search page")
+            self._auth_required = True
+            return []
         
         # Try to extract items from page
         items = await self._extract_items()
+        logger.info("Extracted %d items", len(items))
         
         return items
     
@@ -232,11 +245,14 @@ class PlaywrightProvider:
         """Extract items from current page."""
         items = []
         
+        logger.info("Starting item extraction...")
+        
         # Method 1: Extract from JSON API responses (intercepted)
         # Method 2: Extract from DOM
         try:
             # Find all item links
             item_links = await self._page.query_selector_all("a[href*='/item/']")
+            logger.info("Found %d links with /item/", len(item_links))
             
             for link in item_links:
                 try:
