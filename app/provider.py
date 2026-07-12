@@ -399,8 +399,13 @@ class PlaywrightProvider:
         await self._page.goto(url, timeout=config.browser_timeout)
         await self._page.wait_for_load_state("domcontentloaded", timeout=10000)
         
-        # Wait for content to load
-        await asyncio.sleep(3)
+        # Wait for dynamic content to load (items are rendered by JS)
+        try:
+            await self._page.wait_for_selector("a[href*=/item/]", timeout=10000)
+            logger.info("Item links found")
+        except Exception:
+            logger.info("No item links found after 10s, waiting extra 5s")
+            await asyncio.sleep(5)
         
         # Check current URL
         current_url = self._page.url
