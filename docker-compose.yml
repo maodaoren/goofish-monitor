@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  goofish-monitor:
+    build: .
+    container_name: goofish-monitor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - GOOFISH_DATA_DIR=/app/data
+      - GOOFISH_WEBHOOK_URL=http://host.docker.internal:8644/webhooks/goofish
+      - GOOFISH_WEBHOOK_SECRET=goofish_hmac_secret_2026
+      - GOOFISH_POLL_INTERVAL=60
+      - GOOFISH_MAX_PAGES=3
+      - GOOFISH_HEADLESS=true
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
