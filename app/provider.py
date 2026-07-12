@@ -213,8 +213,8 @@ class PlaywrightProvider:
     async def confirm_login(self, session_id: str) -> dict:
         """Confirm login after user scans QR code.
         
-        Checks current page state - if QR was scanned in main browser,
-        the page should have auto-redirected away from login wall.
+        Waits for page to settle, checks main page AND all iframes
+        for login success markers.
         """
         if session_info := self._login_sessions.get(session_id):
             session_info["status"] = "confirming"
@@ -223,62 +223,76 @@ class PlaywrightProvider:
             if not self._ready:
                 return {"ok": False, "error": "Browser not ready"}
             
-            # Wait a moment for any redirect after QR scan
+            # Wait for page to settle after QR scan
+            await self._page.wait_for_timeout(5000)
+            
+            page_url = self._page.url
+            logger.info("Confirm: current URL = %s", page_url)
+            
+            # Check 1: If already redirected away from login, we're good
+            if "passport" not in page_url:
+                logger.info("Confirm: redirected away from passport, checking content...")
+                content = await self._page.content()
+                if "passport.goofish.com" not in content:
+                    return await self._save_login(session_id, "redirect")
+            
+            # Check 2: Check all frames for login API success markers
+            for frame in self._page.frames:
+                frame_url = str(getattr(frame, "url", "") or "")
+                if any(marker in frame_url for marker in [
+                    "mtop.taobao.idlemessage.pc.loginuser.get",
+                    "mtop.idle.web.user.page.nav",
+                ]):
+                    logger.info("Confirm: found login API in frame: %s", frame_url[:80])
+                    return await self._save_login(session_id, "api_marker")
+            
+            # Check 3: Try navigating to search page
+            logger.info("Confirm: navigating to search to verify...")
+            await self._page.goto(
+                "https://www.goofish.com/search?q=test",
+                wait_until="domcontentloaded",
+                timeout=15000
+            )
             await self._page.wait_for_timeout(3000)
             
-            # Check current page state (don't navigate - the page may have auto-redirected)
             content = await self._page.content()
             page_url = self._page.url
+            logger.info("Confirm: search URL = %s, has passport = %s", page_url, "passport.goofish.com" in content)
             
-            # Check for login success markers
-            is_logged_in = (
-                "passport.goofish.com" not in content
-                and "alibaba-login-box" not in content
-                and "passport" not in page_url
-            )
+            if "passport.goofish.com" not in content:
+                return await self._save_login(session_id, "search_verify")
             
-            if not is_logged_in:
-                # Try navigating to search to double-check
-                await self._page.goto(
-                    "https://www.goofish.com/search?q=test",
-                    wait_until="domcontentloaded",
-                    timeout=15000
-                )
-                await self._page.wait_for_timeout(2000)
-                content = await self._page.content()
-                page_url = self._page.url
-                is_logged_in = "passport.goofish.com" not in content
-            
-            if not is_logged_in:
-                return {"ok": False, "error": "Login not successful - still showing login wall", "url": page_url}
-            
-            # Login successful! Save storage state
-            storage_state = await self._context.storage_state()
-            storage_path = Path(config.storage_state_path)
-            storage_path.parent.mkdir(parents=True, exist_ok=True)
-            storage_path.write_text(json.dumps(storage_state))
-            
-            # Cleanup
-            self._login_sessions.pop(session_id, None)
-            self._auth_required = False
-            self._login_session_active = False
-            self._login_session_id = None
-            
-            # Resume scheduler
-            from .scheduler import scheduler
-            scheduler.resume()
-            
-            logger.info("Login confirmed and saved! URL: %s", page_url)
-            return {"ok": True, "status": "saved", "url": page_url}
+            return {"ok": False, "error": "Login not successful", "url": page_url}
             
         except Exception as e:
             logger.error("Login confirmation failed: %s", e)
-            # Resume scheduler on failure too
             try:
                 from .scheduler import scheduler
                 scheduler.resume()
             except:
                 pass
+            return {"ok": False, "error": str(e)}
+    
+    async def _save_login(self, session_id: str, method: str) -> dict:
+        """Save login state and cleanup."""
+        try:
+            storage_state = await self._context.storage_state()
+            storage_path = Path(config.storage_state_path)
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            storage_path.write_text(json.dumps(storage_state))
+            
+            self._login_sessions.pop(session_id, None)
+            self._auth_required = False
+            self._login_session_active = False
+            self._login_session_id = None
+            
+            from .scheduler import scheduler
+            scheduler.resume()
+            
+            logger.info("Login saved via %s", method)
+            return {"ok": True, "status": "saved", "method": method}
+        except Exception as e:
+            logger.error("Failed to save login: %s", e)
             return {"ok": False, "error": str(e)}
     
     async def check_login_status(self) -> dict:
