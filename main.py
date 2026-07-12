@@ -34,11 +34,7 @@ async def lifespan(app: FastAPI):
     # Start browser
     try:
         await provider.start()
-        logged_in = await provider.ensure_logged_in()
-        if logged_in:
-            logger.info("✅ 浏览器已启动，登录状态正常")
-        else:
-            logger.warning("⚠️ 浏览器已启动，需要扫码登录")
+        logger.info("✅ 浏览器已启动")
     except Exception as e:
         logger.error("❌ 浏览器启动失败: %s", e)
     

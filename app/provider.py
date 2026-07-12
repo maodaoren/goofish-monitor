@@ -209,8 +209,8 @@ class PlaywrightProvider:
     async def confirm_login(self, session_id: str) -> dict:
         """Confirm login after user scans QR code.
         
-        Checks main browser's current page to see if login succeeded
-        (the user scanned the QR in the main browser, so cookies are already there).
+        Checks current page state - if QR was scanned in main browser,
+        the page should have auto-redirected away from login wall.
         """
         if session_info := self._login_sessions.get(session_id):
             session_info["status"] = "confirming"
@@ -219,19 +219,33 @@ class PlaywrightProvider:
             if not self._ready:
                 return {"ok": False, "error": "Browser not ready"}
             
-            # Navigate to search page to verify login
-            await self._page.goto(
-                "https://www.goofish.com/search?q=test",
-                wait_until="domcontentloaded",
-                timeout=15000
-            )
-            await self._page.wait_for_timeout(2000)
+            # Wait a moment for any redirect after QR scan
+            await self._page.wait_for_timeout(3000)
             
+            # Check current page state (don't navigate - the page may have auto-redirected)
             content = await self._page.content()
             page_url = self._page.url
             
-            # Check for login wall
-            if "passport.goofish.com" in content or "alibaba-login-box" in content:
+            # Check for login success markers
+            is_logged_in = (
+                "passport.goofish.com" not in content
+                and "alibaba-login-box" not in content
+                and "passport" not in page_url
+            )
+            
+            if not is_logged_in:
+                # Try navigating to search to double-check
+                await self._page.goto(
+                    "https://www.goofish.com/search?q=test",
+                    wait_until="domcontentloaded",
+                    timeout=15000
+                )
+                await self._page.wait_for_timeout(2000)
+                content = await self._page.content()
+                page_url = self._page.url
+                is_logged_in = "passport.goofish.com" not in content
+            
+            if not is_logged_in:
                 return {"ok": False, "error": "Login not successful - still showing login wall", "url": page_url}
             
             # Login successful! Save storage state
