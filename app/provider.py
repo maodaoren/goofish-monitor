@@ -439,21 +439,50 @@ class PlaywrightProvider:
             logger.error("Failed to capture QR base64: %s", e)
             return None
     
-    async def wait_for_login(self, timeout: int = 60) -> bool:
-        """Wait for user to scan QR code and login."""
+    async def wait_for_login(self, timeout: int = 120) -> bool:
+        """Wait for user to scan QR code and login.
+        
+        This method keeps the browser session open and monitors for login success.
+        The user should scan the QR code displayed at /login/qr endpoint.
+        """
+        logger.info("Waiting for login (timeout=%ds)...", timeout)
         start = time.time()
+        
         while time.time() - start < timeout:
             try:
+                # Check current page content
                 content = await self._page.content()
+                
                 # Check if login wall is gone
                 if "passport.goofish.com" not in content and "alibaba-login-box" not in content:
-                    logger.info("Login successful!")
-                    await self._persist_state()
-                    self._auth_required = False
-                    return True
-                await asyncio.sleep(2)
-            except Exception:
-                await asyncio.sleep(2)
+                    # Check if we can access search results
+                    await self._page.goto(
+                        "https://www.goofish.com/search?q=test",
+                        timeout=15000
+                    )
+                    await asyncio.sleep(2)
+                    
+                    new_content = await self._page.content()
+                    if "passport.goofish.com" not in new_content:
+                        logger.info("Login successful!")
+                        await self._persist_state()
+                        self._auth_required = False
+                        return True
+                
+                # Check for auth success markers in any frame
+                for frame in self._page.frames:
+                    frame_url = str(getattr(frame, "url", "") or "")
+                    if "mtop.taobao.idlemessage.pc.loginuser.get" in frame_url:
+                        logger.info("Login API detected!")
+                        await self._persist_state()
+                        self._auth_required = False
+                        return True
+                
+                await asyncio.sleep(3)
+                
+            except Exception as e:
+                logger.debug("Login check error: %s", e)
+                await asyncio.sleep(3)
         
         logger.warning("Login timeout after %ds", timeout)
         return False
