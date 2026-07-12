@@ -51,6 +51,12 @@ class Scheduler:
                 # Get subscriptions due for polling
                 due_subs = await storage.get_due_subscriptions()
                 
+                # Skip polling if login session is active (don't disturb the browser)
+                if provider._login_session_active:
+                    logger.debug("Login session active, skipping poll")
+                    await asyncio.sleep(config.poll_interval)
+                    continue
+                
                 if due_subs:
                     logger.info("Polling %d subscriptions", len(due_subs))
                     
